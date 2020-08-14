@@ -1,10 +1,81 @@
 import torch
 import torch.nn as nn
 import torchvision.models.vgg as vgg
+import torchvision.models.resnet as resnet
 from mmcv.runner import load_checkpoint
 
 from mmedit.utils import get_root_logger
 from ..registry import LOSSES
+
+
+class _BasePerceptualModel(nn.Module):
+    def __init__(self,
+                 layer_name_list,
+                 net_type,
+                 use_input_norm=True,
+                 pretrained=None):
+        super(_BasePerceptualModel, self).__init__()
+        if pretrained.startswith('torchvision://'):
+            assert net_type in pretrained
+        self.layer_name_list = layer_name_list
+        self.use_input_norm = use_input_norm
+
+        # get vgg model and load pretrained vgg weight
+        # remove _net from attributes to avoid `find_unused_parameters` bug
+        self.net_layers = self.get_net_layers(net_type, layer_name_list, pretrained)
+
+        if self.use_input_norm:
+            # the mean is for image with range [0, 1]
+            self.register_buffer(
+                'mean',
+                torch.Tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+            # the std is for image with range [-1, 1]
+            self.register_buffer(
+                'std',
+                torch.Tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+
+        for v in self.net_layers.parameters():
+            v.requies_grad = False
+
+    def get_net_layers(self, net_type, layer_name_list, pretrained):
+        """
+        get all layers of spec net
+        :param net_type:
+        :param layer_name_list:
+        :param pretrained:
+        :return:
+        """
+        raise NotImplementedError
+
+    def forward(self, x):
+        """Forward function.
+
+        Args:
+            x (Tensor): Input tensor with shape (n, c, h, w).
+
+        Returns:
+            Tensor: Forward results.
+        """
+
+        if self.use_input_norm:
+            x = (x - self.mean) / self.std
+        output = {}
+
+        for name, module in self.net_layers.named_children():
+            x = module(x)
+            if name in self.layer_name_list:
+                output[name] = x.clone()
+        return output
+
+    def init_weights(self, model, pretrained):
+        """Init weights.
+
+        Args:
+            model (nn.Module): Models to be inited.
+            pretrained (str): Path for pretrained weights.
+        """
+        logger = get_root_logger()
+        load_checkpoint(model, pretrained, logger=logger)
 
 
 class PerceptualVGG(nn.Module):
@@ -91,6 +162,27 @@ class PerceptualVGG(nn.Module):
         load_checkpoint(model, pretrained, logger=logger)
 
 
+class PerceptualResNet(_BasePerceptualModel):
+    def get_net_layers(self, net_type, layer_name_list, pretrained):
+        _net = getattr(resnet, net_type)()
+        self.init_weights(_net, pretrained)
+        num_layers = max(map(int, layer_name_list)) + 1
+
+        layers = nn.Sequential([
+            _net.conv1,
+            _net.bn1,
+            _net.relu,
+            _net.maxpool,
+            _net.layer1,
+            _net.layer2,
+            _net.layer3,
+            _net.layer4,
+        ])
+        assert len(layers) >= num_layers
+
+        self.net_layers = layers[:num_layers]
+
+
 @LOSSES.register_module()
 class PerceptualLoss(nn.Module):
     """Perceptual loss with commonly used style loss.
@@ -132,11 +224,21 @@ class PerceptualLoss(nn.Module):
         self.perceptual_weight = perceptual_weight
         self.style_weight = style_weight
         self.layer_weights = layer_weights
-        self.vgg = PerceptualVGG(
-            layer_name_list=list(layer_weights.keys()),
-            vgg_type=vgg_type,
-            use_input_norm=use_input_norm,
-            pretrained=pretrained)
+        if 'vgg' in vgg_type:
+            self.vgg = PerceptualVGG(
+                layer_name_list=list(layer_weights.keys()),
+                vgg_type=vgg_type,
+                use_input_norm=use_input_norm,
+                pretrained=pretrained)
+        elif 'resnet' in vgg_type:
+            self.vgg = PerceptualResNet(
+                layer_name_list=list(layer_weights.keys()),
+                net_type=vgg_type,
+                use_input_norm=use_input_norm,
+                pretrained=pretrained
+            )
+        else:
+            raise ValueError(f'perceptual model type: {vgg_type} is not supported')
 
         if criterion == 'l1':
             self.criterion = torch.nn.L1Loss()
