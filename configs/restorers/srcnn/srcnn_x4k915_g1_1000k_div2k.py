@@ -76,9 +76,9 @@ data = dict(
         times=1000,
         dataset=dict(
             type=train_dataset_type,
-            lq_folder='data/DIV2K/DIV2K_train_LR_bicubic/X4_sub',
-            gt_folder='data/DIV2K/DIV2K_train_HR_sub',
-            ann_file='data/DIV2K/meta_info_DIV2K800sub_GT.txt',
+            lq_folder='data/DIV2K/DIV2K_train_LR_bicubic/X4',
+            gt_folder='data/DIV2K/DIV2K_train_HR',
+            ann_file='data/DIV2K_meta_info_DIV2K800sub_GT.txt',
             pipeline=train_pipeline,
             scale=scale)),
     # val
@@ -108,9 +108,11 @@ total_iters = 1000000
 lr_config = dict(
     policy='CosineRestart',
     by_epoch=False,
-    period=[250000, 250000, 250000, 250000],
+    periods=[250000, 250000, 250000, 250000],
     restart_weights=[1, 1, 1, 1],
-    eta_min=1e-7)
+    #eta_min=1e-7,
+    min_lr=1e-7,
+    )
 
 checkpoint_config = dict(interval=5000, save_optimizer=True, by_epoch=False)
 evaluation = dict(interval=5000, save_image=True, gpu_collect=True)

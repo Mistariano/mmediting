@@ -53,8 +53,11 @@ class LoadImageFromFile(object):
             self.file_client = FileClient(self.io_backend, **self.kwargs)
         filepath = str(results[f'{self.key}_path'])
         img_bytes = self.file_client.get(filepath)
-        img = mmcv.imfrombytes(
-            img_bytes, flag=self.flag, channel_order=self.channel_order)  # HWC
+        try:
+            img = mmcv.imfrombytes(
+                img_bytes, flag=self.flag, channel_order=self.channel_order)  # HWC
+        except Exception as e:
+            raise ValueError(f'failed to load {filepath}')
 
         results[self.key] = img
         results[f'{self.key}_path'] = filepath
